@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+  />
+
+  <title>Security Check</title>
+
+  <style>
+    html,
+    body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      overflow: hidden;
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Helvetica Neue",
+        Arial,
+        sans-serif;
+    }
+
+    body {
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+
+    #root {
+      width: 100%;
+      min-height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #turnstile-container {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #fallback-message {
+      display: none;
+      width: 100%;
+      padding: 12px;
+      box-sizing: border-box;
+      text-align: center;
+      font-size: 13px;
+      color: #666;
+    }
+  </style>
+
+  <script>
+    (function () {
+      "use strict";
+
+      const params = new URLSearchParams(window.location.search);
+      const siteKey = params.get("sitekey");
+
+      let widgetId = null;
+
+      function sendToNative(payload) {
+        try {
+          if (
+            window.ReactNativeWebView &&
+            typeof window.ReactNativeWebView.postMessage === "function"
+          ) {
+            window.ReactNativeWebView.postMessage(
+              JSON.stringify(payload)
+            );
+          }
+        } catch (_) {
+          // Native bridgeへの送信失敗は画面をクラッシュさせない
+        }
+      }
+
+      function showFallback(message) {
+        const element =
+          document.getElementById("fallback-message");
+
+        if (!element) {
+          return;
+        }
+
+        element.textContent = message;
+        element.style.display = "block";
+      }
+
+      function sendError(code, message) {
+        sendToNative({
+          type: "error",
+          code: code || "unknown",
+          message:
+            message ||
+            "CAPTCHAの確認に失敗しました。",
+        });
+      }
+
+      window.onTurnstileLoad = function () {
+        sendToNative({
+          type: "ready",
+          hostname: window.location.hostname,
+          origin: window.location.origin,
+        });
+
+        if (!siteKey) {
+          const message =
+            "Turnstile Site Keyが指定されていません。";
+
+          showFallback(message);
+
+          sendError(
+            "sitekey_missing",
+            message
+          );
+
+          return;
+        }
+
+        if (
+          !window.turnstile ||
+          typeof window.turnstile.render !== "function"
+        ) {
+          const message =
+            "Turnstile APIを利用できません。";
+
+          showFallback(message);
+
+          sendError(
+            "turnstile_api_unavailable",
+            message
+          );
+
+          return;
+        }
+
+        try {
+          widgetId = window.turnstile.render(
+            "#turnstile-container",
+            {
+              sitekey: siteKey,
+
+              theme: "light",
+
+              language: "ja",
+
+              size: "flexible",
+
+              appearance: "always",
+
+              execution: "render",
+
+              retry: "auto",
+
+              "retry-interval": 8000,
+
+              "refresh-expired": "auto",
+
+              "refresh-timeout": "auto",
+
+              callback: function (token) {
+                sendToNative({
+                  type: "token",
+                  token: token,
+                });
+              },
+
+              "error-callback": function (
+                errorCode
+              ) {
+                sendError(
+                  String(
+                    errorCode || "unknown"
+                  ),
+                  "CAPTCHAの確認に失敗しました。"
+                );
+
+                /*
+                 * trueを返すことで
+                 * アプリ側でエラーを認識できる。
+                 * retry:auto によりTurnstile自身も
+                 * 再試行できる。
+                 */
+                return true;
+              },
+
+              "expired-callback": function () {
+                sendToNative({
+                  type: "expired",
+                });
+              },
+
+              "timeout-callback": function () {
+                sendToNative({
+                  type: "timeout",
+                });
+              },
+
+              "unsupported-callback":
+                function () {
+                  const message =
+                    "このブラウザ環境では安全確認を利用できません。";
+
+                  showFallback(message);
+
+                  sendError(
+                    "unsupported",
+                    message
+                  );
+                },
+            }
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : String(error);
+
+          showFallback(
+            "安全確認を開始できませんでした。"
+          );
+
+          sendError(
+            "render_failed",
+            message
+          );
+        }
+      };
+
+      window.addEventListener(
+        "error",
+        function (event) {
+          sendError(
+            "javascript_error",
+            event.message ||
+              "JavaScriptエラーが発生しました。"
+          );
+        }
+      );
+
+      window.addEventListener(
+        "unhandledrejection",
+        function (event) {
+          const reason =
+            event.reason instanceof Error
+              ? event.reason.message
+              : String(
+                  event.reason || "unknown"
+                );
+
+          sendError(
+            "promise_rejection",
+            reason
+          );
+        }
+      );
+    })();
+  </script>
+
+  <script
+    src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileLoad"
+    defer
+  ></script>
+</head>
+
+<body>
+  <main id="root">
+    <div id="turnstile-container"></div>
+
+    <div
+      id="fallback-message"
+      role="alert"
+      aria-live="polite"
+    ></div>
+  </main>
+</body>
+</html>
