@@ -329,3 +329,29 @@ footer p {
     text-align: center;
   }
 }
+
+/* Shared by the preserved Keyword Diary pages under /keyword-diary/. */
+.keyword-header-inner {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.keyword-store {
+  margin-bottom: 48px;
+}
+
+.security-icon {
+  font-size: 40px;
+}
+
+.keyword-policy-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.keyword-back-link {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
