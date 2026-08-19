@@ -10,7 +10,7 @@
 
   <meta name="color-scheme" content="light" />
 
-  <title>Security Check</title>
+  <title>Security Verification</title>
 
   <style>
     *,
@@ -22,53 +22,34 @@
     html,
     body {
       width: 100%;
-      min-height: 100%;
+      height: 100%;
       margin: 0;
       padding: 0;
+
       overflow: hidden;
       background: transparent;
-
-      font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Helvetica Neue",
-        Arial,
-        sans-serif;
     }
 
     body {
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
+      position: relative;
     }
 
-    #root {
-      width: 100%;
-      min-height: 70px;
-
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
+    /*
+     * Invisible Turnstile用のコンテナ。
+     *
+     * display:none は使用せず、
+     * DOM上には存在させたまま最小サイズにする。
+     */
     #turnstile-container {
-      width: 100%;
+      position: absolute;
 
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
+      top: 0;
+      left: 0;
 
-    #fallback-message {
-      display: none;
+      width: 1px;
+      height: 1px;
 
-      width: 100%;
-      padding: 12px 16px;
-
-      color: #666;
-      font-size: 13px;
-      line-height: 1.5;
-      text-align: center;
+      overflow: hidden;
     }
   </style>
 
@@ -76,12 +57,31 @@
     (function () {
       "use strict";
 
-      const params = new URLSearchParams(
-        window.location.search
-      );
+      const params =
+        new URLSearchParams(
+          window.location.search
+        );
 
-      const siteKey = params.get("sitekey");
+      /*
+       * React Native側から
+       *
+       * ?sitekey=xxxx
+       *
+       * の形式で受け取る。
+       */
+      const siteKey =
+        params.get("sitekey");
 
+      let widgetId = null;
+
+      /**
+       * React Native WebViewへ
+       * メッセージを送信する。
+       *
+       * Safariから直接開いた場合は
+       * ReactNativeWebViewが存在しないため、
+       * 何もしない。
+       */
       function sendToNative(payload) {
         try {
           const bridge =
@@ -96,190 +96,216 @@
             );
           }
         } catch (_) {
-          // Do not interrupt Turnstile when
-          // React Native bridge communication fails.
+          // Native Bridgeの失敗で
+          // Turnstile処理を停止させない。
         }
       }
 
-      function showFallback(message) {
-        const element =
-          document.getElementById(
-            "fallback-message"
-          );
-
-        if (!element) {
-          return;
-        }
-
-        element.textContent = message;
-        element.style.display = "block";
-      }
-
+      /**
+       * Native側へエラー通知。
+       */
       function sendError(
         code,
         message
       ) {
         sendToNative({
           type: "error",
-          code: code || "unknown",
+
+          code:
+            code ||
+            "unknown",
+
           message:
             message ||
             "Security verification failed.",
         });
       }
 
+      /**
+       * Turnstile API読み込み完了時に
+       * Cloudflareから呼ばれる。
+       */
       window.onTurnstileLoad =
         function () {
           sendToNative({
             type: "ready",
+
             hostname:
               window.location.hostname,
+
             origin:
               window.location.origin,
           });
 
+          /*
+           * Site Key確認
+           */
           if (!siteKey) {
-            const message =
-              "Security verification configuration is missing.";
-
-            showFallback(message);
-
             sendError(
               "sitekey_missing",
-              message
+              "Turnstile site key is missing."
             );
 
             return;
           }
 
+          /*
+           * Turnstile API確認
+           */
           if (
             !window.turnstile ||
             typeof window.turnstile.render !==
               "function"
           ) {
-            const message =
-              "Security verification service could not be loaded.";
-
-            showFallback(message);
-
             sendError(
               "turnstile_api_unavailable",
-              message
+              "Turnstile API is unavailable."
             );
 
             return;
           }
 
           try {
-            window.turnstile.render(
-              "#turnstile-container",
-              {
-                sitekey: siteKey,
+            /*
+             * Cloudflare Dashboard側で
+             * Widget Mode = Invisible
+             *
+             * にしていることを前提とする。
+             *
+             * Invisible Widgetでは
+             * 可視UIは表示されない。
+             */
+            widgetId =
+              window.turnstile.render(
+                "#turnstile-container",
+                {
+                  sitekey:
+                    siteKey,
 
-                theme: "light",
+                  /*
+                   * render()と同時に
+                   * challengeを開始する。
+                   */
+                  execution:
+                    "render",
 
-                /*
-                 * IMPORTANT:
-                 *
-                 * Force English to avoid Japanese/CJK
-                 * font rendering problems inside
-                 * iOS WKWebView / Simulator.
-                 *
-                 * Turnstile's internal iframe cannot
-                 * be styled from this parent page.
-                 */
-                language: "en",
+                  /*
+                   * 一時的な失敗は
+                   * Cloudflare側で自動再試行。
+                   */
+                  retry:
+                    "auto",
 
-                size: "flexible",
+                  "retry-interval":
+                    8000,
 
-                /*
-                 * Do not show the widget unless
-                 * Cloudflare requires interaction.
-                 */
-                appearance:
-                  "interaction-only",
+                  /*
+                   * Token期限切れ時は
+                   * 自動的に新しいchallengeを実行。
+                   */
+                  "refresh-expired":
+                    "auto",
 
-                execution: "render",
+                  /*
+                   * Invisibleモードでは
+                   * 基本的に表示文字はないが、
+                   * accessibility等も含め
+                   * 英語固定にしておく。
+                   */
+                  language:
+                    "en",
 
-                retry: "auto",
-
-                "retry-interval": 8000,
-
-                "refresh-expired": "auto",
-
-                "refresh-timeout": "auto",
-
-                callback:
-                  function (token) {
-                    if (
-                      !token ||
-                      typeof token !==
-                        "string"
+                  /*
+                   * 成功時
+                   */
+                  callback:
+                    function (
+                      token
                     ) {
+                      if (
+                        !token ||
+                        typeof token !==
+                          "string"
+                      ) {
+                        sendError(
+                          "empty_token",
+                          "Turnstile returned an empty token."
+                        );
+
+                        return;
+                      }
+
+                      sendToNative({
+                        type:
+                          "token",
+
+                        token:
+                          token,
+                      });
+                    },
+
+                  /*
+                   * Challenge失敗時
+                   */
+                  "error-callback":
+                    function (
+                      errorCode
+                    ) {
+                      const code =
+                        String(
+                          errorCode ||
+                            "unknown"
+                        );
+
                       sendError(
-                        "empty_token",
-                        "Security verification token could not be obtained."
+                        code,
+                        "Security verification failed."
                       );
 
-                      return;
-                    }
+                      return true;
+                    },
 
-                    sendToNative({
-                      type: "token",
-                      token: token,
-                    });
-                  },
+                  /*
+                   * Token期限切れ時
+                   */
+                  "expired-callback":
+                    function () {
+                      sendToNative({
+                        type:
+                          "expired",
+                      });
+                    },
 
-                "error-callback":
-                  function (
-                    errorCode
-                  ) {
-                    const code =
-                      String(
-                        errorCode ||
-                          "unknown"
+                  /*
+                   * Browser非対応時
+                   */
+                  "unsupported-callback":
+                    function () {
+                      sendError(
+                        "unsupported",
+                        "Turnstile is not supported in this browser."
                       );
+                    },
+                }
+              );
 
-                    sendError(
-                      code,
-                      "Security verification failed."
-                    );
+            /*
+             * render()自体が成功したことを
+             * Native側へ通知。
+             */
+            sendToNative({
+              type:
+                "rendered",
 
-                    return true;
-                  },
-
-                "expired-callback":
-                  function () {
-                    sendToNative({
-                      type: "expired",
-                    });
-                  },
-
-                "timeout-callback":
-                  function () {
-                    sendToNative({
-                      type: "timeout",
-                    });
-                  },
-
-                "unsupported-callback":
-                  function () {
-                    const message =
-                      "Security verification is not supported on this device.";
-
-                    showFallback(
-                      message
-                    );
-
-                    sendError(
-                      "unsupported",
-                      message
-                    );
-                  },
-              }
-            );
+              widgetId:
+                widgetId != null
+                  ? String(
+                      widgetId
+                    )
+                  : null,
+            });
           } catch (error) {
-            const errorMessage =
+            const message =
               error instanceof Error
                 ? error.message
                 : String(
@@ -287,28 +313,30 @@
                       "unknown"
                   );
 
-            showFallback(
-              "Security verification could not be started."
-            );
-
             sendError(
               "render_failed",
-              errorMessage
+              message
             );
           }
         };
 
+      /**
+       * HTML自体のJavaScriptエラー。
+       */
       window.addEventListener(
         "error",
         function (event) {
           sendError(
             "javascript_error",
             event.message ||
-              "An unexpected error occurred."
+              "Unexpected JavaScript error."
           );
         }
       );
 
+      /**
+       * Promiseの未処理エラー。
+       */
       window.addEventListener(
         "unhandledrejection",
         function (event) {
@@ -325,7 +353,8 @@
                       "unknown"
                   );
           } catch (_) {
-            reason = "unknown";
+            reason =
+              "unknown";
           }
 
           sendError(
@@ -335,13 +364,20 @@
         }
       );
 
+      /**
+       * GitHub Pages自体が
+       * 正常にロードされたことを通知。
+       */
       document.addEventListener(
         "DOMContentLoaded",
         function () {
           sendToNative({
-            type: "page_loaded",
+            type:
+              "page_loaded",
+
             hostname:
               window.location.hostname,
+
             origin:
               window.location.origin,
           });
@@ -350,6 +386,13 @@
     })();
   </script>
 
+  <!--
+    Explicit Renderingを使用。
+
+    onload callbackによって、
+    Turnstile APIが完全に利用可能になってから
+    turnstile.render() を実行する。
+  -->
   <script
     src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileLoad"
     defer
@@ -357,17 +400,9 @@
 </head>
 
 <body>
-  <main id="root">
-    <div
-      id="turnstile-container"
-      aria-label="Security verification"
-    ></div>
-
-    <div
-      id="fallback-message"
-      role="alert"
-      aria-live="polite"
-    ></div>
-  </main>
+  <div
+    id="turnstile-container"
+    aria-hidden="true"
+  ></div>
 </body>
 </html>
